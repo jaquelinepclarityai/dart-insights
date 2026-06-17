@@ -155,17 +155,18 @@ st.subheader("Throughput & trends")
 c1, c2 = st.columns(2)
 
 with c1:
-    created_m = fdf.set_index("created").resample("M").size().rename("Created")
-    resolved_m = resolved.set_index("resolved").resample("M").size().rename("Resolved")
-    flow = pd.concat([created_m, resolved_m], axis=1).fillna(0).reset_index()
-    flow = flow.melt("created", var_name="type", value_name="count")
+    created_m = fdf.set_index("created").resample("ME").size().rename("Created")
+    resolved_m = resolved.set_index("resolved").resample("ME").size().rename("Resolved")
+    flow = pd.concat([created_m, resolved_m], axis=1).fillna(0)
+    flow.index.name = "month"
+    flow = flow.reset_index().melt("month", var_name="type", value_name="count")
     st.markdown("**Created vs Resolved per month**")
     st.altair_chart(
         alt.Chart(flow).mark_line(point=True).encode(
-            x=alt.X("created:T", title=None),
+            x=alt.X("month:T", title=None),
             y=alt.Y("count:Q", title="Tickets"),
             color=alt.Color("type:N", title=None, scale=alt.Scale(range=config.BRAND_SCALE)),
-            tooltip=["created:T", "type:N", "count:Q"],
+            tooltip=["month:T", "type:N", "count:Q"],
         ).properties(height=280),
         use_container_width=True,
     )
@@ -174,7 +175,7 @@ with c2:
     st.markdown("**Gen AI adoption over time** (% of resolved tickets)")
     ga = resolved.dropna(subset=["resolved"]).set_index("resolved")
     if not ga.empty:
-        adoption = ga.resample("M")["genai_used"].mean().mul(100).rename("genai_pct").reset_index()
+        adoption = ga.resample("ME")["genai_used"].mean().mul(100).rename("genai_pct").reset_index()
         st.altair_chart(
             alt.Chart(adoption).mark_area(
                 opacity=0.5, line={"color": config.BRAND["primary"]}, color=config.BRAND["teal"]
@@ -192,7 +193,7 @@ with c3:
     st.markdown("**On-time delivery rate per month**")
     ot = resolved[resolved["has_due"]].dropna(subset=["resolved"]).set_index("resolved")
     if not ot.empty:
-        otm = ot.resample("M")["on_time"].mean().mul(100).rename("on_time_pct").reset_index()
+        otm = ot.resample("ME")["on_time"].mean().mul(100).rename("on_time_pct").reset_index()
         st.altair_chart(
             alt.Chart(otm).mark_line(point=True, color=config.BRAND["primary"]).encode(
                 x=alt.X("resolved:T", title=None),
