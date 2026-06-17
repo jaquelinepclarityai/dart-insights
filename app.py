@@ -92,9 +92,12 @@ else:
 with st.sidebar:
     st.header("Filters")
     if df["created"].notna().any():
+        # Default the date window to start at Jan 2026 (clamped to available data).
         dmin = df["created"].min().date()
         dmax = pd.Timestamp.now().date()
-        date_range = st.date_input("Created between", value=(dmin, dmax), min_value=dmin, max_value=dmax)
+        default_start = max(dmin, pd.Timestamp("2026-01-01").date())
+        date_range = st.date_input("Created between", value=(default_start, dmax),
+                                   min_value=dmin, max_value=dmax)
     else:
         date_range = None
 
@@ -105,23 +108,11 @@ with st.sidebar:
     f_type = multi("Request type", "request_type")
     f_tier = multi("Client tier", "client_tier")
     f_account = multi("Account type", "account_type")
-    f_complexity = multi("Complexity", "complexity")
-    f_assignee = multi("Assignee", "assignee")
+    f_owner = multi("Owner (analyst)", "owner")
+    f_requester = multi("Requester", "reporter")
     if st.button("🔄 Refresh from Jira"):
         st.cache_data.clear()
         st.rerun()
-
-    with st.expander("🔌 Test Jira connection"):
-        if st.button("Run test"):
-            try:
-                import jira_client
-
-                email, token = jira_client._credentials()
-                st.write(f"Credentials found for: `{email}`")
-                issues = jira_client.fetch_issues(page_size=5, max_pages=1)
-                st.success(f"HTTP 200 · query returned {len(issues)} issue(s) on first page.")
-            except Exception as e:  # noqa: BLE001
-                st.error(f"{type(e).__name__}: {e}")
 
 # Apply filters
 mask = pd.Series(True, index=df.index)
@@ -129,29 +120,31 @@ if date_range and len(date_range) == 2:
     start, end = pd.Timestamp(date_range[0]), pd.Timestamp(date_range[1]) + pd.Timedelta(days=1)
     mask &= df["created"].between(start, end)
 for col, sel in [("request_type", f_type), ("client_tier", f_tier), ("account_type", f_account),
-                 ("complexity", f_complexity), ("assignee", f_assignee)]:
+                 ("owner", f_owner), ("reporter", f_requester)]:
     if sel:
         mask &= df[col].isin(sel)
 fdf = df[mask]
 
 resolved = fdf[fdf["is_resolved"]]
+# Closed-only subset: these two KPIs count strictly tickets in status "Closed".
+closed = fdf[fdf["status"] == "Closed"]
 
 # --- KPI row --------------------------------------------------------------
 st.subheader("Key KPIs")
 k1, k2, k3, k4, k5 = st.columns(5)
 
-median_ttr = resolved["resolution_days"].median()
+median_ttr = closed["resolution_days"].median()
 k1.metric("Median time to resolve", f"{median_ttr:.1f} d" if pd.notna(median_ttr) else "–",
-          help="Median days from ticket creation to resolution (resolved tickets).")
+          help="Median days from creation to resolution, for tickets in status 'Closed'.")
 
-genai_n = int(resolved["genai_used"].sum())
-k2.metric("Gen AI used", pct(genai_n, len(resolved)),
-          help=f"{genai_n} of {len(resolved)} resolved tickets flagged 'GenAI used = Yes'.")
+genai_n = int(closed["genai_used"].sum())
+k2.metric("Gen AI used", pct(genai_n, len(closed)),
+          help=f"{genai_n} of {len(closed)} Closed tickets flagged 'GenAI used = Yes'.")
 
-with_due = resolved[resolved["has_due"]]
+with_due = closed[closed["has_due"]]
 on_time_n = int(with_due["on_time"].sum())
 k3.metric("Delivered on time", pct(on_time_n, len(with_due)),
-          help=f"{on_time_n} of {len(with_due)} resolved tickets (with a due date) met the due date.")
+          help=f"{on_time_n} of {len(with_due)} Closed tickets (with a due date) met the due date.")
 
 k4.metric("Open tickets", f"{int((~fdf['is_resolved']).sum()):,}",
           help="Currently unresolved tickets in scope.")
@@ -261,7 +254,7 @@ for col_obj, field, title in breakdowns:
 b4, b5, b6 = st.columns(3)
 for col_obj, field, title in [(b4, "client_tier", "By client tier"),
                               (b5, "account_type", "By account type"),
-                              (b6, "assignee", "Workload by assignee")]:
+                              (b6, "owner", "Workload by owner (analyst)")]:
     with col_obj:
         counts = fdf[field].dropna().value_counts().head(12).rename_axis(field).reset_index(name="count")
         if not counts.empty:
@@ -277,7 +270,7 @@ if overdue.empty:
 else:
     overdue["days_overdue"] = (pd.Timestamp.now().normalize() - overdue["due"].dt.normalize()).dt.days
     show = overdue.sort_values("days_overdue", ascending=False)[
-        ["key", "summary", "assignee", "client_tier", "due", "days_overdue", "status", "url"]
+        ["key", "summary", "owner", "reporter", "client_tier", "due", "days_overdue", "status", "url"]
     ]
     st.dataframe(
         show, use_container_width=True, hide_index=True,
@@ -285,15 +278,21 @@ else:
             "url": st.column_config.LinkColumn("Open", display_text="↗"),
             "due": st.column_config.DateColumn("Due"),
             "days_overdue": st.column_config.NumberColumn("Days overdue"),
+            "owner": st.column_config.TextColumn("Owner"),
+            "reporter": st.column_config.TextColumn("Requester"),
         },
     )
 
 with st.expander("Browse all tickets in scope"):
     st.dataframe(
-        fdf[["key", "summary", "status", "request_type", "assignee", "created",
+        fdf[["key", "summary", "status", "request_type", "owner", "reporter", "created",
              "resolved", "due", "resolution_days", "genai_used", "on_time", "url"]],
         use_container_width=True, hide_index=True,
-        column_config={"url": st.column_config.LinkColumn("Open", display_text="↗")},
+        column_config={
+            "url": st.column_config.LinkColumn("Open", display_text="↗"),
+            "owner": st.column_config.TextColumn("Owner"),
+            "reporter": st.column_config.TextColumn("Requester"),
+        },
     )
     st.download_button("⬇️ Download CSV", fdf.to_csv(index=False).encode("utf-8"),
                        "dart_tickets.csv", "text/csv")
