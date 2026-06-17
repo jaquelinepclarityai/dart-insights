@@ -8,14 +8,11 @@ Team) project field metadata.
 # --- Jira site -------------------------------------------------------------
 JIRA_BASE_URL = "https://clarityai.atlassian.net"
 
-# Saved Jira filters that define the DART scope. These are the filters you
-# already use in Jira, so the dashboard always matches your boards.
-FILTER_CLOSED = 12331   # https://clarityai.atlassian.net/issues/?filter=12331
-FILTER_OPEN = 14650     # https://clarityai.atlassian.net/issues/?filter=14650
+# Saved Jira filter that defines the DART scope (open + closed tickets).
+# https://clarityai.atlassian.net/issues?filter=15851
+FILTER_ID = 15851
 
-# A single JQL that returns BOTH open and closed DART tickets. We union the two
-# saved filters so the dashboard has the full picture in one query.
-JQL_ALL = f"filter = {FILTER_CLOSED} OR filter = {FILTER_OPEN}"
+JQL_ALL = f"filter = {FILTER_ID}"
 
 # --- Field mapping (resolved from CCON field metadata) ---------------------
 FIELDS = {

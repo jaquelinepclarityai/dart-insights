@@ -24,7 +24,7 @@ All charts respect the sidebar filters (date range, request type, client tier, a
 ## Data source
 
 Tickets are pulled live from Jira using your existing saved filters
-(`filter = 12331` closed, `filter = 14650` open — see `config.py`). Field IDs are
+(`filter = 15851` — see `config.py`). Field IDs are
 already mapped to the CCON project. If no credentials are present, the app shows
 **synthetic sample data** so it still renders.
 

@@ -49,8 +49,8 @@ def load_data() -> tuple[pd.DataFrame, str, str]:
         if not df.empty:
             return df, "live", f"{len(df)} tickets"
         return (sample_data.sample_dataframe(), "sample",
-                "Connected to Jira, but the query returned 0 issues. Check that "
-                "filters 12331 / 14650 are shared with your token's account.")
+                f"Connected to Jira, but the query returned 0 issues. Check that "
+                f"filter {config.FILTER_ID} is shared with your token's account.")
     except Exception as e:  # noqa: BLE001 - surface any auth/network issue as a banner
         detail = str(e) or repr(e)
         return sample_data.sample_dataframe(), "sample", detail
