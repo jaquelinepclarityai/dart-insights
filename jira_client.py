@@ -34,8 +34,12 @@ def _credentials() -> tuple[str, str]:
     return email, token
 
 
-def fetch_issues(jql: str = config.JQL_ALL, page_size: int = 100) -> list[dict[str, Any]]:
-    """Fetch all issues matching JQL using the enhanced search endpoint."""
+def fetch_issues(jql: str = config.JQL_ALL, page_size: int = 100,
+                 max_pages: int | None = None) -> list[dict[str, Any]]:
+    """Fetch all issues matching JQL using the enhanced search endpoint.
+
+    max_pages limits how many pages are pulled (used by the connection test).
+    """
     email, token = _credentials()
     url = f"{config.JIRA_BASE_URL}/rest/api/3/search/jql"
     session = requests.Session()
@@ -44,6 +48,7 @@ def fetch_issues(jql: str = config.JQL_ALL, page_size: int = 100) -> list[dict[s
 
     issues: list[dict[str, Any]] = []
     next_token: str | None = None
+    pages = 0
     while True:
         payload: dict[str, Any] = {
             "jql": jql,
@@ -53,11 +58,16 @@ def fetch_issues(jql: str = config.JQL_ALL, page_size: int = 100) -> list[dict[s
         if next_token:
             payload["nextPageToken"] = next_token
         resp = session.post(url, json=payload, timeout=60)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            # Surface the API's own explanation (auth / bad filter / bad field).
+            raise RuntimeError(
+                f"Jira API {resp.status_code} {resp.reason}: {resp.text[:500]}"
+            )
         data = resp.json()
         issues.extend(data.get("issues", []))
         next_token = data.get("nextPageToken")
-        if not next_token or data.get("isLast"):
+        pages += 1
+        if not next_token or data.get("isLast") or (max_pages and pages >= max_pages):
             break
     return issues
 

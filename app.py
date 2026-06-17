@@ -37,20 +37,23 @@ st.markdown(
 
 
 @st.cache_data(ttl=900, show_spinner="Loading tickets from Jira…")
-def load_data() -> tuple[pd.DataFrame, str]:
-    """Return (dataframe, source_label). Tries Jira, falls back to sample data."""
+def load_data() -> tuple[pd.DataFrame, str, str]:
+    """Return (dataframe, source_label, detail). Tries Jira, falls back to sample."""
+    import sample_data
+
     try:
         import jira_client
 
         issues = jira_client.fetch_issues()
         df = jira_client.issues_to_dataframe(issues)
         if not df.empty:
-            return df, "live"
+            return df, "live", f"{len(df)} tickets"
+        return (sample_data.sample_dataframe(), "sample",
+                "Connected to Jira, but the query returned 0 issues. Check that "
+                "filters 12331 / 14650 are shared with your token's account.")
     except Exception as e:  # noqa: BLE001 - surface any auth/network issue as a banner
-        st.session_state["load_error"] = str(e)
-    import sample_data
-
-    return sample_data.sample_dataframe(), "sample"
+        detail = str(e) or repr(e)
+        return sample_data.sample_dataframe(), "sample", detail
 
 
 def pct(n: int, d: int) -> str:
@@ -73,20 +76,17 @@ def bar(data: pd.DataFrame, x: str, y: str, title: str, color: str | None = None
             .properties(title=title, height=max(120, 28 * len(data))))
 
 
-df, source = load_data()
+df, source, detail = load_data()
 
 # --- Header ---------------------------------------------------------------
 st.title(f"{config.APP_ICON} {config.APP_TITLE}")
 st.caption("Ticket insights & KPIs for the DART (Product Specialists) team · data from Jira CCON")
 
 if source == "sample":
-    st.warning(
-        "Showing **synthetic sample data** — Jira credentials not configured. "
-        "Add `JIRA_EMAIL` and `JIRA_API_TOKEN` in app secrets to go live. "
-        + (f"({st.session_state['load_error']})" if st.session_state.get("load_error") else "")
-    )
+    st.warning("⚠️ Showing **synthetic sample data** (not connected to live Jira).")
+    st.error(f"**Reason:** {detail}")
 else:
-    st.success(f"Live data · {len(df):,} tickets loaded from Jira.")
+    st.success(f"✅ Live data · {len(df):,} tickets loaded from Jira.")
 
 # --- Sidebar filters ------------------------------------------------------
 with st.sidebar:
@@ -110,6 +110,18 @@ with st.sidebar:
     if st.button("🔄 Refresh from Jira"):
         st.cache_data.clear()
         st.rerun()
+
+    with st.expander("🔌 Test Jira connection"):
+        if st.button("Run test"):
+            try:
+                import jira_client
+
+                email, token = jira_client._credentials()
+                st.write(f"Credentials found for: `{email}`")
+                issues = jira_client.fetch_issues(page_size=5, max_pages=1)
+                st.success(f"HTTP 200 · query returned {len(issues)} issue(s) on first page.")
+            except Exception as e:  # noqa: BLE001
+                st.error(f"{type(e).__name__}: {e}")
 
 # Apply filters
 mask = pd.Series(True, index=df.index)
