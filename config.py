@@ -50,6 +50,20 @@ API_FIELDS = [
 # Value (as stored in Jira) that means "Gen AI was used".
 GENAI_YES_VALUE = "Yes"
 
+# --- Delivered-on-time KPI (Google Sheet snapshots) ------------------------
+# The on-time KPI is sourced from the DART snapshot sheet, not from Jira due
+# dates. It averages the "% All tickets On Time today" column (column C) across
+# the daily snapshots, for the owners listed below.
+# The sheet (or this specific tab) must be shared "Anyone with the link → Viewer".
+ONTIME_SHEET_ID = "1e6CRPOHJuHDaLqiHfTqIlaf8zW_3pVWBgGadeFIN7Xw"
+ONTIME_SHEET_GID = "903942725"
+# The snapshot tab has no clean header row, so we read by column position:
+# A=Date, B=Name, C="% All tickets On Time today".
+ONTIME_DATE_IDX = 0
+ONTIME_NAME_IDX = 1
+ONTIME_PCT_IDX = 2
+ONTIME_OWNERS = ["rei.jimenez", "Alberto Aguado Rodríguez"]
+
 # Branding — Clarity AI palette (sourced from clarity.ai site CSS)
 APP_TITLE = "DART Insights"
 APP_ICON = "📊"

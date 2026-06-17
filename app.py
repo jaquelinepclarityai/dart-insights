@@ -56,6 +56,14 @@ def load_data() -> tuple[pd.DataFrame, str, str]:
         return sample_data.sample_dataframe(), "sample", detail
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def load_on_time() -> dict:
+    """Delivered-on-time stats from the DART snapshot Google Sheet."""
+    import sheet_client
+
+    return sheet_client.fetch_on_time()
+
+
 def pct(n: int, d: int) -> str:
     return f"{(100 * n / d):.0f}%" if d else "–"
 
@@ -74,6 +82,13 @@ def bar(data: pd.DataFrame, x: str, y: str, title: str, color: str | None = None
         mark["color"] = config.BRAND["primary"]
     return (alt.Chart(data).mark_bar(**mark).encode(**enc)
             .properties(title=title, height=max(120, 28 * len(data))))
+
+
+def explode_area(d: pd.DataFrame) -> pd.DataFrame:
+    """Thematic area is a multi-select stored as 'A, B'. Split so each area
+    counts independently."""
+    s = d.assign(area=d["thematic_area"].fillna("").str.split(", ")).explode("area")
+    return s[s["area"].str.len() > 0]
 
 
 df, source, detail = load_data()
@@ -141,10 +156,14 @@ genai_n = int(closed["genai_used"].sum())
 k2.metric("Gen AI used", pct(genai_n, len(closed)),
           help=f"{genai_n} of {len(closed)} Closed tickets flagged 'GenAI used = Yes'.")
 
-with_due = closed[closed["has_due"]]
-on_time_n = int(with_due["on_time"].sum())
-k3.metric("Delivered on time", pct(on_time_n, len(with_due)),
-          help=f"{on_time_n} of {len(with_due)} Closed tickets (with a due date) met the due date.")
+ontime = load_on_time()
+if ontime.get("pct") is not None:
+    per = " · ".join(f"{name.split()[0]}: {p:.0f}%" for name, p in ontime["per_owner"].items())
+    k3.metric("Delivered on time", f"{ontime['pct']:.0f}%",
+              help=f"Latest snapshot (as of {ontime.get('as_of')}) of '% All tickets On Time "
+                   f"today' for Rei + Alberto. {per}")
+else:
+    k3.metric("Delivered on time", "–", help=f"Sheet unavailable: {ontime.get('error')}")
 
 k4.metric("Open tickets", f"{int((~fdf['is_resolved']).sum()):,}",
           help="Currently unresolved tickets in scope.")
@@ -160,6 +179,23 @@ st.subheader("Throughput & trends")
 c1, c2 = st.columns(2)
 
 with c1:
+    st.markdown("**Ticket creation trend** (tickets created per month)")
+    cm = fdf.dropna(subset=["created"]).set_index("created").resample("ME").size()
+    cm = cm.rename("count"); cm.index.name = "month"
+    cm = cm.reset_index()
+    if not cm.empty:
+        st.altair_chart(
+            alt.Chart(cm).mark_area(
+                opacity=0.5, line={"color": config.BRAND["primary"]}, color=config.BRAND["teal"]
+            ).encode(
+                x=alt.X("month:T", title=None),
+                y=alt.Y("count:Q", title="Created"),
+                tooltip=["month:T", "count:Q"],
+            ).properties(height=280),
+            use_container_width=True,
+        )
+
+with c2:
     created_m = fdf.set_index("created").resample("ME").size().rename("Created")
     resolved_m = resolved.set_index("resolved").resample("ME").size().rename("Resolved")
     flow = pd.concat([created_m, resolved_m], axis=1).fillna(0)
@@ -176,9 +212,10 @@ with c1:
         use_container_width=True,
     )
 
-with c2:
-    st.markdown("**Gen AI adoption over time** (% of resolved tickets)")
-    ga = resolved.dropna(subset=["resolved"]).set_index("resolved")
+c3, c4 = st.columns(2)
+with c3:
+    st.markdown("**Gen AI adoption over time** (% of Closed tickets)")
+    ga = closed.dropna(subset=["resolved"]).set_index("resolved")
     if not ga.empty:
         adoption = ga.resample("ME")["genai_used"].mean().mul(100).rename("genai_pct").reset_index()
         st.altair_chart(
@@ -191,12 +228,9 @@ with c2:
             ).properties(height=280),
             use_container_width=True,
         )
-
-# On-time trend + resolution by complexity
-c3, c4 = st.columns(2)
-with c3:
-    st.markdown("**On-time delivery rate per month**")
-    ot = resolved[resolved["has_due"]].dropna(subset=["resolved"]).set_index("resolved")
+with c4:
+    st.markdown("**On-time delivery rate per month** (Closed tickets)")
+    ot = closed[closed["has_due"]].dropna(subset=["resolved"]).set_index("resolved")
     if not ot.empty:
         otm = ot.resample("ME")["on_time"].mean().mul(100).rename("on_time_pct").reset_index()
         st.altair_chart(
@@ -204,53 +238,47 @@ with c3:
                 x=alt.X("resolved:T", title=None),
                 y=alt.Y("on_time_pct:Q", title="% on time", scale=alt.Scale(domain=[0, 100])),
                 tooltip=["resolved:T", alt.Tooltip("on_time_pct:Q", format=".0f")],
-            ).properties(height=260),
-            use_container_width=True,
-        )
-with c4:
-    st.markdown("**Time to resolve by complexity** (days)")
-    if resolved["complexity"].notna().any():
-        st.altair_chart(
-            alt.Chart(resolved.dropna(subset=["complexity", "resolution_days"])).mark_boxplot(extent="min-max").encode(
-                x=alt.X("complexity:N", sort=["Low", "Medium", "High"], title=None),
-                y=alt.Y("resolution_days:Q", title="Days"),
-                color=alt.Color("complexity:N", legend=None, scale=alt.Scale(range=config.BRAND_SCALE)),
-            ).properties(height=260),
+            ).properties(height=280),
             use_container_width=True,
         )
 
 st.divider()
 
-# --- Gen AI impact --------------------------------------------------------
-st.subheader("Gen AI impact")
-g1, g2 = st.columns([1, 2])
-with g1:
-    comp = resolved.groupby("genai_used")["resolution_days"].median().rename("median_days").reset_index()
+# --- Thematic area & Gen AI analysis --------------------------------------
+st.subheader("Thematic area & Gen AI analysis")
+closed_area = explode_area(closed)
+
+a1, a2 = st.columns(2)
+with a1:
+    comp = closed.groupby("genai_used")["resolution_days"].median().rename("median_days").reset_index()
     comp["genai_used"] = comp["genai_used"].map({True: "Gen AI", False: "No Gen AI"})
-    st.altair_chart(bar(comp, "median_days", "genai_used", "Median resolve time: Gen AI vs not"),
+    st.altair_chart(bar(comp, "median_days", "genai_used", "Resolve time by Gen AI used (median days)"),
                     use_container_width=True)
-with g2:
-    by_type = (resolved.groupby("request_type")["genai_used"].mean().mul(100)
+with a2:
+    ga_area = (closed_area.groupby("area")["genai_used"].mean().mul(100)
                .rename("genai_pct").reset_index().sort_values("genai_pct", ascending=False))
-    st.altair_chart(bar(by_type, "genai_pct", "request_type", "Gen AI usage by request type (%)"),
-                    use_container_width=True)
+    if not ga_area.empty:
+        st.altair_chart(bar(ga_area, "genai_pct", "area", "Gen AI used by thematic area (%)"),
+                        use_container_width=True)
+
+a3, a4 = st.columns(2)
+with a3:
+    rt_area = (closed_area.dropna(subset=["resolution_days"]).groupby("area")["resolution_days"]
+               .median().rename("median_days").reset_index().sort_values("median_days", ascending=False))
+    if not rt_area.empty:
+        st.altair_chart(bar(rt_area, "median_days", "area", "Resolve time by thematic area (median days)"),
+                        use_container_width=True)
+with a4:
+    counts = (explode_area(fdf).groupby("area").size().rename("count")
+              .reset_index().sort_values("count", ascending=False).head(12))
+    if not counts.empty:
+        st.altair_chart(bar(counts, "count", "area", "Ticket volume by thematic area"),
+                        use_container_width=True)
 
 st.divider()
 
 # --- Breakdowns -----------------------------------------------------------
 st.subheader("Where the work goes")
-b1, b2, b3 = st.columns(3)
-breakdowns = [
-    (b1, "request_type", "By request type"),
-    (b2, "ps_category", "By PS category"),
-    (b3, "thematic_area", "By thematic area"),
-]
-for col_obj, field, title in breakdowns:
-    with col_obj:
-        counts = fdf[field].dropna().value_counts().head(12).rename_axis(field).reset_index(name="count")
-        if not counts.empty:
-            st.altair_chart(bar(counts, "count", field, title), use_container_width=True)
-
 b4, b5, b6 = st.columns(3)
 for col_obj, field, title in [(b4, "client_tier", "By client tier"),
                               (b5, "account_type", "By account type"),
