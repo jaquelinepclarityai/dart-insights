@@ -34,20 +34,26 @@ def _to_pct(series: pd.Series) -> pd.Series:
     return vals
 
 
-def fetch_on_time() -> dict:
-    """Return on-time stats for the configured owners.
+def fetch_on_time_df() -> dict:
+    """Return the per-owner daily snapshot rows.
 
-    {"pct": float|None, "per_owner": {name: pct}, "snapshots": int, "error": str|None}
+    {"df": DataFrame[date, name, pct] | None, "error": str|None}
+    The caller filters by date range and aggregates.
     """
     try:
         resp = requests.get(_csv_url(), timeout=30)
         if resp.status_code >= 400:
-            return {"pct": None, "per_owner": {}, "snapshots": 0,
+            return {"df": None,
                     "error": f"Sheet HTTP {resp.status_code} — is it shared 'Anyone with the link'?"}
+        ctype = resp.headers.get("content-type", "")
+        if "text/csv" not in ctype and resp.text.lstrip()[:15].lower().startswith(("<!doctype", "<html")):
+            return {"df": None,
+                    "error": "Google returned a login page, not CSV. Re-share the sheet "
+                             "'Anyone with the link → Viewer' or use 'Publish to web' (CSV)."}
         # No clean header row in this tab: read positionally.
         raw = pd.read_csv(io.StringIO(resp.text), header=None, dtype=str)
     except Exception as e:  # noqa: BLE001
-        return {"pct": None, "per_owner": {}, "snapshots": 0, "error": str(e) or repr(e)}
+        return {"df": None, "error": str(e) or repr(e)}
 
     df = pd.DataFrame({
         "date": pd.to_datetime(raw.iloc[:, config.ONTIME_DATE_IDX], errors="coerce"),
@@ -56,12 +62,5 @@ def fetch_on_time() -> dict:
     })
     df = df[df["name"].isin(config.ONTIME_OWNERS)].dropna(subset=["pct", "date"])
     if df.empty:
-        return {"pct": None, "per_owner": {}, "snapshots": 0, "as_of": None,
-                "error": "No snapshot rows found for the configured owners."}
-
-    # The sheet is appended to daily — use each owner's most recent snapshot.
-    latest = df.sort_values("date").groupby("name").tail(1)
-    per_owner = latest.set_index("name")["pct"].round(1).to_dict()
-    return {"pct": float(latest["pct"].mean()), "per_owner": per_owner,
-            "snapshots": int(len(latest)),
-            "as_of": latest["date"].max().date().isoformat(), "error": None}
+        return {"df": None, "error": "No snapshot rows found for the configured owners."}
+    return {"df": df.reset_index(drop=True), "error": None}

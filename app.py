@@ -58,10 +58,10 @@ def load_data() -> tuple[pd.DataFrame, str, str]:
 
 @st.cache_data(ttl=900, show_spinner=False)
 def load_on_time() -> dict:
-    """Delivered-on-time stats from the DART snapshot Google Sheet."""
+    """Daily on-time snapshot rows from the DART Google Sheet (Rei + Alberto)."""
     import sheet_client
 
-    return sheet_client.fetch_on_time()
+    return sheet_client.fetch_on_time_df()
 
 
 def pct(n: int, d: int) -> str:
@@ -157,13 +157,25 @@ k2.metric("Gen AI used", pct(genai_n, len(closed)),
           help=f"{genai_n} of {len(closed)} Closed tickets flagged 'GenAI used = Yes'.")
 
 ontime = load_on_time()
-if ontime.get("pct") is not None:
-    per = " · ".join(f"{name.split()[0]}: {p:.0f}%" for name, p in ontime["per_owner"].items())
-    k3.metric("Delivered on time", f"{ontime['pct']:.0f}%",
-              help=f"Latest snapshot (as of {ontime.get('as_of')}) of '% All tickets On Time "
-                   f"today' for Rei + Alberto. {per}")
+ot_err = ontime.get("error")
+ot_df = ontime.get("df")
+if ot_df is not None:
+    # Average '% On Time today' across snapshots in the selected period (Rei + Alberto).
+    snaps = ot_df
+    if date_range and len(date_range) == 2:
+        snaps = snaps[snaps["date"].between(pd.Timestamp(date_range[0]),
+                                            pd.Timestamp(date_range[1]) + pd.Timedelta(days=1))]
+    if snaps.empty:
+        k3.metric("Delivered on time", "–", help="No snapshots in the selected period.")
+    else:
+        per = " · ".join(f"{n.split()[0]}: {p:.0f}%"
+                         for n, p in snaps.groupby("name")["pct"].mean().items())
+        k3.metric("Delivered on time", f"{snaps['pct'].mean():.0f}%",
+                  help=f"Avg of '% On Time today' across {len(snaps)} snapshots in the selected "
+                       f"period for Rei + Alberto. {per}")
 else:
-    k3.metric("Delivered on time", "–", help=f"Sheet unavailable: {ontime.get('error')}")
+    k3.metric("Delivered on time", "–", help="On-time sheet could not be read.")
+    st.warning(f"⚠️ Delivered-on-time sheet not loaded: {ot_err}")
 
 k4.metric("Open tickets", f"{int((~fdf['is_resolved']).sum()):,}",
           help="Currently unresolved tickets in scope.")
