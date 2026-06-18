@@ -41,6 +41,7 @@ FIELDS = {
 API_FIELDS = [
     "summary", "status", "issuetype", "priority", "assignee", "reporter",
     "created", "resolutiondate", "resolution",
+    "timetracking", "timespent", "aggregatetimespent",
     FIELDS["duedate"], FIELDS["genai"], FIELDS["request_type"],
     FIELDS["thematic_area"], FIELDS["ps_category"], FIELDS["client_tier"],
     FIELDS["account_type"], FIELDS["complexity"], FIELDS["workload"],

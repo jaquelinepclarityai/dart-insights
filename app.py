@@ -289,6 +289,60 @@ with a4:
 
 st.divider()
 
+# --- Time tracking (Time Spent) -------------------------------------------
+st.subheader("Time tracking")
+if "time_spent_h" in fdf.columns and fdf["time_spent_h"].fillna(0).sum() > 0:
+    logged = closed[closed["time_spent_h"].fillna(0) > 0]
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total hours logged", f"{fdf['time_spent_h'].fillna(0).sum():,.0f} h",
+              help="Sum of logged time across all tickets in scope.")
+    m2.metric("Median per closed ticket",
+              f"{logged['time_spent_h'].median():.1f} h" if len(logged) else "–",
+              help="Median logged hours per Closed ticket that has any logged time.")
+    m3.metric("Avg per closed ticket",
+              f"{logged['time_spent_h'].mean():.1f} h" if len(logged) else "–")
+
+    t1, t2 = st.columns(2)
+    with t1:
+        by_owner = (closed.groupby("owner")["time_spent_h"].sum()
+                    .rename("hours").reset_index().sort_values("hours", ascending=False).head(12))
+        by_owner = by_owner[by_owner["hours"] > 0]
+        if not by_owner.empty:
+            st.altair_chart(bar(by_owner, "hours", "owner", "Total hours by owner (analyst)"),
+                            use_container_width=True)
+    with t2:
+        area_h = (explode_area(closed).groupby("area")["time_spent_h"].sum()
+                  .rename("hours").reset_index().sort_values("hours", ascending=False))
+        area_h = area_h[area_h["hours"] > 0]
+        if not area_h.empty:
+            st.altair_chart(bar(area_h, "hours", "area", "Total hours by thematic area"),
+                            use_container_width=True)
+
+    t3, t4 = st.columns(2)
+    with t3:
+        eff = logged.groupby("genai_used")["time_spent_h"].median().rename("median_h").reset_index()
+        eff["genai_used"] = eff["genai_used"].map({True: "Gen AI", False: "No Gen AI"})
+        if not eff.empty:
+            st.altair_chart(bar(eff, "median_h", "genai_used",
+                                "Median effort per ticket: Gen AI vs not (h)"),
+                            use_container_width=True)
+    with t4:
+        sc = logged.dropna(subset=["resolution_days"])
+        if not sc.empty:
+            st.markdown("**Effort vs calendar time** (Closed tickets)")
+            st.altair_chart(
+                alt.Chart(sc).mark_circle(opacity=0.5, color=config.BRAND["primary"]).encode(
+                    x=alt.X("time_spent_h:Q", title="Hours logged"),
+                    y=alt.Y("resolution_days:Q", title="Days to resolve"),
+                    tooltip=["key", "owner", "time_spent_h", "resolution_days"],
+                ).properties(height=260),
+                use_container_width=True,
+            )
+else:
+    st.info("No Time tracking (Time Spent) data found on the tickets in scope.")
+
+st.divider()
+
 # --- Breakdowns -----------------------------------------------------------
 st.subheader("Where the work goes")
 b4, b5, b6 = st.columns(3)
@@ -326,7 +380,7 @@ else:
 with st.expander("Browse all tickets in scope"):
     st.dataframe(
         fdf[["key", "summary", "status", "request_type", "owner", "reporter", "created",
-             "resolved", "due", "resolution_days", "genai_used", "on_time", "url"]],
+             "resolved", "due", "resolution_days", "time_spent_h", "genai_used", "on_time", "url"]],
         use_container_width=True, hide_index=True,
         column_config={
             "url": st.column_config.LinkColumn("Open", display_text="↗"),

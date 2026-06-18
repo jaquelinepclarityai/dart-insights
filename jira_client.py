@@ -108,6 +108,12 @@ def issues_to_dataframe(issues: list[dict[str, Any]]) -> pd.DataFrame:
                 "owner": _opt_value(fld.get(f["owner"])),
                 "created": fld.get("created"),
                 "resolved": fld.get("resolutiondate"),
+                "time_spent_h": (
+                    # Jira "Time tracking" field → timeSpentSeconds; fall back to
+                    # the aggregate/system timespent fields if not present.
+                    ((fld.get("timetracking") or {}).get("timeSpentSeconds")
+                     or fld.get("aggregatetimespent") or fld.get("timespent") or 0) / 3600.0
+                ),
                 "due": fld.get(f["duedate"]),
                 "resolution": _opt_value(fld.get("resolution")),
                 "genai": genai_raw,

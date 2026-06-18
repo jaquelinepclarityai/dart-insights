@@ -30,6 +30,9 @@ def sample_dataframe(n: int = 320) -> pd.DataFrame:
         dur = max(0.2, rng.gamma(2.2, base / 2.2) * (0.7 if genai else 1.0))
         resolved_flag = rng.random() < 0.78
         resolved = created[i] + pd.Timedelta(days=dur) if resolved_flag else pd.NaT
+        # Logged effort (hours): scales with complexity, less when Gen AI used.
+        eff_base = {"Low": 1.5, "Medium": 4.0, "High": 9.0}[cplx]
+        time_spent_h = round(max(0.0, rng.gamma(2.0, eff_base / 2.0) * (0.65 if genai else 1.0)), 1)
         due = created[i] + pd.Timedelta(days=base + rng.integers(1, 6))
         rows.append({
             "key": f"CCON-{1000 + i}",
@@ -44,6 +47,7 @@ def sample_dataframe(n: int = 320) -> pd.DataFrame:
             "owner": rng.choice(assignees),
             "created": created[i],
             "resolved": resolved,
+            "time_spent_h": time_spent_h,
             "due": due,
             "resolution": "Done" if resolved_flag else None,
             "genai": "Yes" if genai else "No",
