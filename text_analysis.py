@@ -60,7 +60,8 @@ ONE_OFF = [re.compile(p, re.IGNORECASE) for p in [
 def is_one_off(text: str) -> bool:
     """True if the text describes a one-off / ad-hoc extraction (not a routine delivery)."""
     t = text or ""
-    if re.search(r"\bmonthly delivery\b", t, re.IGNORECASE):
+    # Exclude routine recurring work — anything mentioning "monthly".
+    if re.search(r"\bmonthly\b", t, re.IGNORECASE):
         return False
     return any(p.search(t) for p in ONE_OFF)
 
