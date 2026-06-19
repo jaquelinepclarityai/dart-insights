@@ -49,43 +49,31 @@ def classify(text: str) -> str:
     return "Other / uncategorised"
 
 
-# --- Change Requests (chargeable extra work) -------------------------------
+# --- One-off extractions (chargeable extra work) ---------------------------
+# Match anything related to a one-off / ad-hoc extraction.
 ONE_OFF = [re.compile(p, re.IGNORECASE) for p in [
     r"\bone[ -]?off\b", r"\bad[ -]?hoc\b", r"\bextraction\b", r"\bextract\b",
-    r"\bcomparison\b", r"\bsample\b", r"\bhistorical\b", r"\bbespoke\b",
+    r"\bbespoke\b", r"\bcustom (?:extract|data|request)\b", r"\bdata pull\b",
 ]]
-DATAFEED_CHANGE = [re.compile(p, re.IGNORECASE) for p in [
-    r"\bdatafeed\b", r"\bdata feed\b", r"\bdataset\b", r"\bmapping file\b",
-    r"\bnew mapping\b", r"\badd(?:ing)? column", r"\badd(?:ing)?\b.*\b(metric|field|file)\b",
-    r"\breinclud", r"\bremov.*\b(metric|column|field)\b", r"\bplaceholder",
-    r"\bcustom\b.*\b(metric|risk|sector|field)\b",
-]]
-CHANGE_TYPES = ["One-Off Extraction", "Datafeed Change"]
 
 
-def classify_change_request(text: str) -> str | None:
-    """Return 'One-Off Extraction', 'Datafeed Change', or None."""
+def is_one_off(text: str) -> bool:
+    """True if the text describes a one-off / ad-hoc extraction (not a routine delivery)."""
     t = text or ""
-    # Explicit one-off wording wins; otherwise datafeed-modification wording.
-    if any(p.search(t) for p in ONE_OFF) and not re.search(r"\bmonthly delivery\b", t, re.I):
-        # A datafeed *modification* (not a routine delivery) still counts as datafeed change
-        if any(p.search(t) for p in DATAFEED_CHANGE) and not any(
-            re.search(p, t, re.I) for p in [r"\bone[ -]?off\b", r"\bad[ -]?hoc\b", r"\bextraction\b"]
-        ):
-            return "Datafeed Change"
-        return "One-Off Extraction"
-    if any(p.search(t) for p in DATAFEED_CHANGE) and not re.search(r"\bmonthly delivery\b", t, re.I):
-        return "Datafeed Change"
-    return None
+    if re.search(r"\bmonthly delivery\b", t, re.IGNORECASE):
+        return False
+    return any(p.search(t) for p in ONE_OFF)
 
 
 def annotate(df: pd.DataFrame) -> pd.DataFrame:
-    """Add 'req_category', 'change_type', and 'is_change_request' columns."""
+    """Add 'req_category', 'one_off', and 'is_one_off' columns.
+
+    is_one_off = one-off extraction AND an existing Client (not prospect/internal).
+    """
     out = df.copy()
     blob = (out["summary"].fillna("") + " . "
             + out.get("description", pd.Series("", index=out.index)).fillna(""))
     out["req_category"] = blob.map(classify)
-    out["change_type"] = blob.map(classify_change_request)
-    # Change request = a chargeable type AND an existing Client (not prospect/internal).
-    out["is_change_request"] = out["change_type"].notna() & out["account_type"].eq("Client")
+    out["one_off"] = blob.map(is_one_off)
+    out["is_one_off"] = out["one_off"] & out["account_type"].eq("Client")
     return out
