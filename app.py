@@ -137,7 +137,7 @@ with st.sidebar:
     f_type = multi("Request type", "request_type")
     f_tier = multi("Client tier", "client_tier")
     f_account = multi("Account type", "account_type")
-    f_owner = multi("Owner (analyst)", "owner")
+    f_owner = multi("Owner", "owner")
     f_requester = multi("Requester", "reporter")
     if st.button("🔄 Refresh from Jira"):
         st.cache_data.clear()
@@ -187,8 +187,8 @@ median_ttr = closed["resolution_days"].median()
 k3.metric("Median time to resolve", f"{median_ttr:.1f} d" if pd.notna(median_ttr) else "–",
           help="Median days from creation to resolution, for tickets in status 'Closed'.")
 
-k4.metric("Open tickets", f"{int((~fdf['is_resolved']).sum()):,}",
-          help="Currently unresolved tickets in scope.")
+k4.metric("Total tickets", f"{len(fdf):,}",
+          help="Tickets created within the selected period.")
 
 overdue_n = int(fdf["overdue_open"].sum())
 k5.metric("Overdue & open", f"{overdue_n:,}", delta=None,
@@ -376,42 +376,56 @@ with cc2:
 
 st.divider()
 
-# --- Request-type / billing-potential analysis -----------------------------
-st.subheader("Request types & billing potential")
-st.caption("Heuristic classification of each ticket from its title + description, to spot "
-           "**one-off / ad-hoc extractions for existing Clients** — work that may be chargeable.")
+# --- Change Requests (chargeable extra work) -------------------------------
+st.subheader("Change Requests")
+st.caption("Client extra-work classified from title + description into **One-Off Extractions** and "
+           "**Datafeed Changes** — candidates to charge existing Clients for (matches the one-off analysis).")
 
-r1, r2 = st.columns(2)
-with r1:
-    cats = (fdf_tagged.groupby("req_category").size().rename("count").reset_index()
-            .sort_values("count", ascending=False))
-    st.altair_chart(bar(cats, "count", "req_category", "Tickets by detected request type"),
-                    use_container_width=True)
-with r2:
-    billable = fdf_tagged[fdf_tagged["billable_candidate"]]
-    bh = billable["time_spent_h"].fillna(0).sum() if "time_spent_h" in billable else 0
-    mb1, mb2 = st.columns(2)
-    mb1.metric("Billable candidates", f"{len(billable):,}",
-               help="Client tickets classified as one-off / ad-hoc extraction (potential extra charge).")
-    mb2.metric("Effort in those tickets", f"{bh:,.0f} h",
-               help="Total logged hours across billable-candidate tickets.")
-    bc = (billable.groupby("client").size().rename("billable_tickets").reset_index()
-          .sort_values("billable_tickets", ascending=False).head(10))
-    bc = bc[bc["client"] != "Unknown"]
-    if not bc.empty:
-        st.altair_chart(bar(bc, "billable_tickets", "client", "One-off extraction tickets by Client"),
-                        use_container_width=True)
+cr = fdf_tagged[fdf_tagged["is_change_request"]].copy()
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Change requests", f"{len(cr):,}")
+m2.metric("One-Off Extractions", f"{int((cr['change_type'] == 'One-Off Extraction').sum()):,}")
+m3.metric("Datafeed Changes", f"{int((cr['change_type'] == 'Datafeed Change').sum()):,}")
+m4.metric("Total hours", f"{cr['time_spent_h'].fillna(0).sum():,.0f} h" if 'time_spent_h' in cr else "–")
 
-with st.expander("🔎 Review billable-candidate tickets (Client one-off / extractions)"):
-    cols = ["key", "client", "summary", "owner", "time_spent_h", "created", "url"]
-    cols = [c for c in cols if c in billable.columns]
+if cr.empty:
+    st.info("No Client change requests detected in the selected period.")
+else:
+    # Per-client summary table, mirroring the one-off analysis sheet.
+    g = cr.assign(hours=cr["time_spent_h"].fillna(0) if "time_spent_h" in cr else 0)
+    summary = g.groupby("client").agg(
+        Tier=("client_tier", lambda s: s.dropna().iloc[0] if s.notna().any() else "—"),
+        Total_Requests=("key", "count"),
+        Datafeed_Changes=("change_type", lambda s: int((s == "Datafeed Change").sum())),
+        One_Off_Extractions=("change_type", lambda s: int((s == "One-Off Extraction").sum())),
+        Total_Hours=("hours", "sum"),
+    ).reset_index().sort_values("Total_Requests", ascending=False)
+    summary = summary[summary["client"] != "Unknown"]
     st.dataframe(
-        billable[cols].sort_values("time_spent_h", ascending=False) if "time_spent_h" in billable else billable[cols],
-        use_container_width=True, hide_index=True,
-        column_config={"url": st.column_config.LinkColumn("Open", display_text="↗"),
-                       "time_spent_h": st.column_config.NumberColumn("Hours", format="%.1f")},
+        summary, use_container_width=True, hide_index=True,
+        column_config={
+            "client": "Client", "Tier": "Tier",
+            "Total_Requests": st.column_config.NumberColumn("Total Requests"),
+            "Datafeed_Changes": st.column_config.NumberColumn("Datafeed Changes"),
+            "One_Off_Extractions": st.column_config.NumberColumn("One-Off Extractions"),
+            "Total_Hours": st.column_config.NumberColumn("Total Hours", format="%.2f"),
+        },
     )
-    st.caption("⚠️ Keyword-based heuristic — review before billing. Tune patterns in text_analysis.py.")
+
+    with st.expander("🔎 Change-request ticket detail"):
+        cols = [c for c in ["key", "date", "client", "summary", "change_type", "owner",
+                            "time_spent_h", "status", "created", "url"] if c in cr.columns or c == "date"]
+        detail = cr.assign(date=cr["created"].dt.date)[
+            [c for c in ["key", "date", "client", "summary", "change_type", "owner",
+                         "time_spent_h", "status", "url"] if c in cr.columns or c == "date"]
+        ].sort_values("date", ascending=False)
+        st.dataframe(
+            detail, use_container_width=True, hide_index=True,
+            column_config={"url": st.column_config.LinkColumn("Open", display_text="↗"),
+                           "change_type": "Type",
+                           "time_spent_h": st.column_config.NumberColumn("Hours", format="%.1f")},
+        )
+        st.caption("⚠️ Keyword-based heuristic — review before billing. Tune patterns in text_analysis.py.")
 
 st.divider()
 
