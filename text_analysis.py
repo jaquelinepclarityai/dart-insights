@@ -77,4 +77,6 @@ def annotate(df: pd.DataFrame) -> pd.DataFrame:
     out["req_category"] = blob.map(classify)
     out["one_off"] = blob.map(is_one_off)
     out["is_one_off"] = out["one_off"] & out["account_type"].eq("Client")
+    # Routine recurring work (monthly deliveries) — flag so it can be excluded.
+    out["is_monthly"] = blob.str.contains(r"\bmonthly\b", case=False, regex=True, na=False)
     return out

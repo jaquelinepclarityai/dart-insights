@@ -359,16 +359,20 @@ import text_analysis
 
 fdf_tagged = text_analysis.annotate(fdf)
 
+# Exclude routine monthly recurring tickets from the per-client counts.
+clients_df = fdf_tagged[~fdf_tagged["is_monthly"]]
+st.caption("Excludes routine monthly recurring deliveries.")
+
 cc1, cc2 = st.columns([2, 1])
 with cc1:
-    by_client = (fdf_tagged.groupby("client").size().rename("tickets").reset_index()
+    by_client = (clients_df.groupby("client").size().rename("tickets").reset_index()
                  .sort_values("tickets", ascending=False).head(15))
     by_client = by_client[by_client["client"] != "Unknown"]
     if not by_client.empty:
         st.altair_chart(bar(by_client, "tickets", "client", "Tickets generated per client"),
                         use_container_width=True)
 with cc2:
-    st.metric("Distinct clients", f"{fdf_tagged.loc[fdf_tagged['client'] != 'Unknown', 'client'].nunique():,}")
+    st.metric("Distinct clients", f"{clients_df.loc[clients_df['client'] != 'Unknown', 'client'].nunique():,}")
     top = by_client.head(1)
     if not top.empty:
         st.metric("Top client", f"{top.iloc[0]['client']}",
