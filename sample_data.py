@@ -21,6 +21,17 @@ def sample_dataframe(n: int = 320) -> pd.DataFrame:
     complexity = ["Low", "Medium", "High"]
     workload = ["Low", "Medium", "Strategic"]
     assignees = ["A. Aguado", "R. Jimenez", "G. Rossi", "V. Estrada", "M. Gisbert", "C. Manchón"]
+    owners = ["Alberto Aguado Rodríguez", "rei.jimenez", "Víctor Estrada", "María Oñate"]
+    clients = ["SYZ AM", "CAA", "BlackRock", "Amundi", "Nordea", "Santander", "BBVA"]
+    templates = [
+        ("[{c}] Monthly Delivery", "Recurring datafeed monthly delivery via SOP."),
+        ("[{c}] One-off extraction request", "Client asked for a one-off ad-hoc extraction of metrics."),
+        ("[{c}] Custom data extract", "Bespoke export of exposures, custom request."),
+        ("[{c}] Coverage gap", "Missing coverage, please add companies to the universe."),
+        ("[{c}] Incorrect data", "Reported a discrepancy / wrong value, needs a fix."),
+        ("[{c}] Methodology question", "How does the SFDR PAI methodology work? Clarification."),
+        ("[{c}] RFP questionnaire", "RFI / diligence questionnaire to complete."),
+    ]
 
     rows = []
     for i in range(n):
@@ -34,17 +45,21 @@ def sample_dataframe(n: int = 320) -> pd.DataFrame:
         eff_base = {"Low": 1.5, "Medium": 4.0, "High": 9.0}[cplx]
         time_spent_h = round(max(0.0, rng.gamma(2.0, eff_base / 2.0) * (0.65 if genai else 1.0)), 1)
         due = created[i] + pd.Timedelta(days=base + rng.integers(1, 6))
+        cli = rng.choice(clients)
+        tmpl, desc = templates[rng.integers(0, len(templates))]
         rows.append({
             "key": f"CCON-{1000 + i}",
             "url": f"{config.JIRA_BASE_URL}/browse/CCON-{1000 + i}",
-            "summary": f"Sample ticket {i}",
+            "summary": tmpl.format(c=cli),
+            "description": desc,
+            "client": cli,
             "status": "Closed" if resolved_flag else rng.choice(["In Progress", "To Do", "Blocked"]),
             "status_category": "Done" if resolved_flag else "In Progress",
             "issuetype": "Task",
             "priority": rng.choice(["Low", "Medium", "High"], p=[0.5, 0.35, 0.15]),
             "assignee": rng.choice(assignees),
             "reporter": rng.choice(assignees),
-            "owner": rng.choice(assignees),
+            "owner": rng.choice(owners),
             "created": created[i],
             "resolved": resolved,
             "time_spent_h": time_spent_h,

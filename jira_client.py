@@ -6,6 +6,7 @@ these come from st.secrets; locally from .streamlit/secrets.toml or env vars.
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 import pandas as pd
@@ -88,17 +89,44 @@ def _opt_value(v: Any) -> Any:
     return v
 
 
+def _adf_text(node: Any) -> str:
+    """Flatten an Atlassian Document Format (ADF) description to plain text."""
+    if node is None:
+        return ""
+    if isinstance(node, str):
+        return node
+    if isinstance(node, list):
+        return " ".join(_adf_text(n) for n in node)
+    if isinstance(node, dict):
+        txt = node.get("text", "")
+        return (txt + " " + _adf_text(node.get("content"))).strip()
+    return ""
+
+
+def _client_from_summary(summary: str | None) -> str:
+    """Tickets are titled like '[CLIENT] ...' — pull the leading bracket tag."""
+    if not summary:
+        return "Unknown"
+    m = re.match(r"\s*\[([^\]]+)\]", summary)
+    return m.group(1).strip() if m else "Unknown"
+
+
 def issues_to_dataframe(issues: list[dict[str, Any]]) -> pd.DataFrame:
     f = config.FIELDS
     rows = []
     for it in issues:
         fld = it.get("fields", {})
         genai_raw = _opt_value(fld.get(f["genai"]))
+        summary = fld.get("summary")
+        desc = fld.get("description")
+        desc_text = desc if isinstance(desc, str) else _adf_text(desc)
         rows.append(
             {
                 "key": it.get("key"),
                 "url": f"{config.JIRA_BASE_URL}/browse/{it.get('key')}",
-                "summary": fld.get("summary"),
+                "summary": summary,
+                "description": desc_text,
+                "client": _client_from_summary(summary),
                 "status": _opt_value(fld.get("status")),
                 "status_category": (fld.get("status") or {}).get("statusCategory", {}).get("name"),
                 "issuetype": _opt_value(fld.get("issuetype")),

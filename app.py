@@ -110,9 +110,23 @@ with st.sidebar:
         # Default the date window to start at Jan 2026 (clamped to available data).
         dmin = df["created"].min().date()
         dmax = pd.Timestamp.now().date()
-        default_start = max(dmin, pd.Timestamp("2026-01-01").date())
-        date_range = st.date_input("Created between", value=(default_start, dmax),
-                                   min_value=dmin, max_value=dmax)
+
+        # Quarter filter: separate Quarter + Year selectors.
+        years = list(range(dmax.year, dmin.year - 1, -1))   # most recent first
+        qcol, ycol = st.columns(2)
+        quarter = qcol.selectbox("Quarter", ["Custom", "Q1", "Q2", "Q3", "Q4"], index=0)
+        year = ycol.selectbox("Year", years, index=0, disabled=(quarter == "Custom"))
+
+        if quarter == "Custom":
+            default_start = max(dmin, pd.Timestamp("2026-01-01").date())
+            date_range = st.date_input("Created between", value=(default_start, dmax),
+                                       min_value=dmin, max_value=dmax)
+        else:
+            q = int(quarter[1])
+            qs = pd.Timestamp(year, 3 * q - 2, 1)
+            qe = qs + pd.offsets.QuarterEnd()
+            date_range = (qs.date(), qe.date())
+            st.caption(f"📅 {quarter} {year}: {qs.date()} → {qe.date()}")
     else:
         date_range = None
 
@@ -148,34 +162,30 @@ closed = fdf[fdf["status"] == "Closed"]
 st.subheader("Key KPIs")
 k1, k2, k3, k4, k5 = st.columns(5)
 
-median_ttr = closed["resolution_days"].median()
-k1.metric("Median time to resolve", f"{median_ttr:.1f} d" if pd.notna(median_ttr) else "–",
-          help="Median days from creation to resolution, for tickets in status 'Closed'.")
+# Delivered on time: of tickets owned by Rei/Alberto RESOLVED in the selected
+# period, the % resolved on or before their due date ("solved within deadline").
+ot_pool = closed[closed["owner"].isin(config.ONTIME_OWNERS)].copy()
+if date_range and len(date_range) == 2:
+    ot_pool = ot_pool[ot_pool["resolved"].between(start, end)]
+ot_pool = ot_pool[ot_pool["has_due"]]   # need a due date to judge the deadline
+if len(ot_pool):
+    on_n = int(ot_pool["on_time"].sum())
+    per = " · ".join(f"{n.split('.')[0].split()[0].title()}: {g['on_time'].mean()*100:.0f}%"
+                     for n, g in ot_pool.groupby("owner"))
+    k1.metric("Delivered on time", pct(on_n, len(ot_pool)),
+              help=f"{on_n} of {len(ot_pool)} tickets (Rei+Alberto) resolved in the selected "
+                   f"period met their due date. {per}")
+else:
+    k1.metric("Delivered on time", "–",
+              help="No resolved tickets with a due date for Rei/Alberto in the selected period.")
 
 genai_n = int(closed["genai_used"].sum())
 k2.metric("Gen AI used", pct(genai_n, len(closed)),
           help=f"{genai_n} of {len(closed)} Closed tickets flagged 'GenAI used = Yes'.")
 
-ontime = load_on_time()
-ot_err = ontime.get("error")
-ot_df = ontime.get("df")
-if ot_df is not None:
-    # Average '% On Time today' across snapshots in the selected period (Rei + Alberto).
-    snaps = ot_df
-    if date_range and len(date_range) == 2:
-        snaps = snaps[snaps["date"].between(pd.Timestamp(date_range[0]),
-                                            pd.Timestamp(date_range[1]) + pd.Timedelta(days=1))]
-    if snaps.empty:
-        k3.metric("Delivered on time", "–", help="No snapshots in the selected period.")
-    else:
-        per = " · ".join(f"{n.split()[0]}: {p:.0f}%"
-                         for n, p in snaps.groupby("name")["pct"].mean().items())
-        k3.metric("Delivered on time", f"{snaps['pct'].mean():.0f}%",
-                  help=f"Avg of '% On Time today' across {len(snaps)} snapshots in the selected "
-                       f"period for Rei + Alberto. {per}")
-else:
-    k3.metric("Delivered on time", "–", help="On-time sheet could not be read.")
-    st.warning(f"⚠️ Delivered-on-time sheet not loaded: {ot_err}")
+median_ttr = closed["resolution_days"].median()
+k3.metric("Median time to resolve", f"{median_ttr:.1f} d" if pd.notna(median_ttr) else "–",
+          help="Median days from creation to resolution, for tickets in status 'Closed'.")
 
 k4.metric("Open tickets", f"{int((~fdf['is_resolved']).sum()):,}",
           help="Currently unresolved tickets in scope.")
@@ -340,6 +350,68 @@ if "time_spent_h" in fdf.columns and fdf["time_spent_h"].fillna(0).sum() > 0:
             )
 else:
     st.info("No Time tracking (Time Spent) data found on the tickets in scope.")
+
+st.divider()
+
+# --- Clients ---------------------------------------------------------------
+st.subheader("Clients")
+import text_analysis
+
+fdf_tagged = text_analysis.annotate(fdf)
+
+cc1, cc2 = st.columns([2, 1])
+with cc1:
+    by_client = (fdf_tagged.groupby("client").size().rename("tickets").reset_index()
+                 .sort_values("tickets", ascending=False).head(15))
+    by_client = by_client[by_client["client"] != "Unknown"]
+    if not by_client.empty:
+        st.altair_chart(bar(by_client, "tickets", "client", "Tickets generated per client"),
+                        use_container_width=True)
+with cc2:
+    st.metric("Distinct clients", f"{fdf_tagged.loc[fdf_tagged['client'] != 'Unknown', 'client'].nunique():,}")
+    top = by_client.head(1)
+    if not top.empty:
+        st.metric("Top client", f"{top.iloc[0]['client']}",
+                  help=f"{int(top.iloc[0]['tickets'])} tickets in scope.")
+
+st.divider()
+
+# --- Request-type / billing-potential analysis -----------------------------
+st.subheader("Request types & billing potential")
+st.caption("Heuristic classification of each ticket from its title + description, to spot "
+           "**one-off / ad-hoc extractions for existing Clients** — work that may be chargeable.")
+
+r1, r2 = st.columns(2)
+with r1:
+    cats = (fdf_tagged.groupby("req_category").size().rename("count").reset_index()
+            .sort_values("count", ascending=False))
+    st.altair_chart(bar(cats, "count", "req_category", "Tickets by detected request type"),
+                    use_container_width=True)
+with r2:
+    billable = fdf_tagged[fdf_tagged["billable_candidate"]]
+    bh = billable["time_spent_h"].fillna(0).sum() if "time_spent_h" in billable else 0
+    mb1, mb2 = st.columns(2)
+    mb1.metric("Billable candidates", f"{len(billable):,}",
+               help="Client tickets classified as one-off / ad-hoc extraction (potential extra charge).")
+    mb2.metric("Effort in those tickets", f"{bh:,.0f} h",
+               help="Total logged hours across billable-candidate tickets.")
+    bc = (billable.groupby("client").size().rename("billable_tickets").reset_index()
+          .sort_values("billable_tickets", ascending=False).head(10))
+    bc = bc[bc["client"] != "Unknown"]
+    if not bc.empty:
+        st.altair_chart(bar(bc, "billable_tickets", "client", "One-off extraction tickets by Client"),
+                        use_container_width=True)
+
+with st.expander("🔎 Review billable-candidate tickets (Client one-off / extractions)"):
+    cols = ["key", "client", "summary", "owner", "time_spent_h", "created", "url"]
+    cols = [c for c in cols if c in billable.columns]
+    st.dataframe(
+        billable[cols].sort_values("time_spent_h", ascending=False) if "time_spent_h" in billable else billable[cols],
+        use_container_width=True, hide_index=True,
+        column_config={"url": st.column_config.LinkColumn("Open", display_text="↗"),
+                       "time_spent_h": st.column_config.NumberColumn("Hours", format="%.1f")},
+    )
+    st.caption("⚠️ Keyword-based heuristic — review before billing. Tune patterns in text_analysis.py.")
 
 st.divider()
 

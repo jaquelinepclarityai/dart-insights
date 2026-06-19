@@ -39,7 +39,7 @@ FIELDS = {
 
 # Fields requested from the Jira API (system + custom).
 API_FIELDS = [
-    "summary", "status", "issuetype", "priority", "assignee", "reporter",
+    "summary", "description", "status", "issuetype", "priority", "assignee", "reporter",
     "created", "resolutiondate", "resolution",
     "timetracking", "timespent", "aggregatetimespent",
     FIELDS["duedate"], FIELDS["genai"], FIELDS["request_type"],
