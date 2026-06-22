@@ -134,7 +134,6 @@ with st.sidebar:
         opts = sorted([v for v in df[col].dropna().unique()])
         return st.multiselect(label, opts)
 
-    f_type = multi("Request type", "request_type")
     f_tier = multi("Client tier", "client_tier")
     f_account = multi("Account type", "account_type")
     f_owner = multi("Owner", "owner")
@@ -148,7 +147,7 @@ mask = pd.Series(True, index=df.index)
 if date_range and len(date_range) == 2:
     start, end = pd.Timestamp(date_range[0]), pd.Timestamp(date_range[1]) + pd.Timedelta(days=1)
     mask &= df["created"].between(start, end)
-for col, sel in [("request_type", f_type), ("client_tier", f_tier), ("account_type", f_account),
+for col, sel in [("client_tier", f_tier), ("account_type", f_account),
                  ("owner", f_owner), ("reporter", f_requester)]:
     if sel:
         mask &= df[col].isin(sel)
@@ -328,10 +327,12 @@ if "time_spent_h" in fdf.columns and fdf["time_spent_h"].fillna(0).sum() > 0:
             st.altair_chart(bar(area_h, "hours", "area", "Total hours by thematic area"),
                             use_container_width=True)
 
+    GENAI_LABELS = {True: "Gen AI", False: "No Gen AI"}
+
     t3, t4 = st.columns(2)
     with t3:
         eff = logged.groupby("genai_used")["time_spent_h"].median().rename("median_h").reset_index()
-        eff["genai_used"] = eff["genai_used"].map({True: "Gen AI", False: "No Gen AI"})
+        eff["genai_used"] = eff["genai_used"].map(GENAI_LABELS)
         if not eff.empty:
             st.altair_chart(bar(eff, "median_h", "genai_used",
                                 "Median effort per ticket: Gen AI vs not (h)"),
@@ -348,6 +349,50 @@ if "time_spent_h" in fdf.columns and fdf["time_spent_h"].fillna(0).sum() > 0:
                 ).properties(height=260),
                 use_container_width=True,
             )
+
+    # --- Gen AI effort gap: by thematic area & over time ------------------
+    st.markdown("**Gen AI effort gap** — does using Gen AI reduce time spent, "
+                "by thematic area and over time?")
+    g1, g2 = st.columns(2)
+    with g1:
+        ga_logged = explode_area(logged)
+        gap = (ga_logged.groupby(["area", "genai_used"])["time_spent_h"]
+               .median().rename("median_h").reset_index())
+        if not gap.empty:
+            gap["Gen AI"] = gap["genai_used"].map(GENAI_LABELS)
+            st.altair_chart(
+                alt.Chart(gap).mark_bar().encode(
+                    x=alt.X("median_h:Q", title="Median hours"),
+                    y=alt.Y("area:N", sort="-x", title=None),
+                    yOffset=alt.YOffset("Gen AI:N"),
+                    color=alt.Color("Gen AI:N", title=None,
+                                    scale=alt.Scale(range=config.BRAND_SCALE)),
+                    tooltip=["area:N", "Gen AI:N", alt.Tooltip("median_h:Q", format=".1f")],
+                ).properties(title="Median effort: Gen AI vs not, by thematic area",
+                             height=max(160, 46 * gap["area"].nunique())),
+                use_container_width=True,
+            )
+        else:
+            st.caption("Not enough logged-time data to compare by thematic area.")
+    with g2:
+        trend = logged.dropna(subset=["resolved"]).copy()
+        if not trend.empty:
+            trend["month"] = trend["resolved"].dt.to_period("M").dt.to_timestamp()
+            tg = (trend.groupby(["month", "genai_used"])["time_spent_h"]
+                  .median().rename("median_h").reset_index())
+            tg["Gen AI"] = tg["genai_used"].map(GENAI_LABELS)
+            st.altair_chart(
+                alt.Chart(tg).mark_line(point=True).encode(
+                    x=alt.X("month:T", title=None),
+                    y=alt.Y("median_h:Q", title="Median hours"),
+                    color=alt.Color("Gen AI:N", title=None,
+                                    scale=alt.Scale(range=config.BRAND_SCALE)),
+                    tooltip=["month:T", "Gen AI:N", alt.Tooltip("median_h:Q", format=".1f")],
+                ).properties(title="Median effort over time: Gen AI vs not", height=280),
+                use_container_width=True,
+            )
+        else:
+            st.caption("Not enough resolved tickets with logged time to plot a trend.")
 else:
     st.info("No Time tracking (Time Spent) data found on the tickets in scope.")
 
